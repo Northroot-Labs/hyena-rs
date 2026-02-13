@@ -9,10 +9,14 @@ fn hyena() -> Command {
     let exe = std::env::var("CARGO_BIN_EXE_hyena")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            let profile = std::env::var("CARGO_BUILD_PROFILE").unwrap_or_else(|_| "debug".into());
-            root.join("target").join(profile).join("hyena")
+            // Try release first (CI uses --release), then debug
+            let release_path = root.join("target/release/hyena");
+            if release_path.exists() {
+                release_path
+            } else {
+                root.join("target/debug/hyena")
+            }
         });
-    let exe = exe.canonicalize().unwrap_or(exe);
     let mut c = Command::new(&exe);
     c.current_dir(&root);
     c
