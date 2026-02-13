@@ -3,6 +3,9 @@
 
 mod context;
 mod policy;
+mod raw;
+mod scratch;
+mod search;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -42,7 +45,11 @@ enum Commands {
     /// Walk NOTES.md, chunk, append events to .notes/notes.ndjson
     Ingest,
     /// Grep/scan .notes/notes.ndjson (and optionally scratch)
-    Search { query: String },
+    Search {
+        query: String,
+        #[arg(long)]
+        include_scratch: bool,
+    },
     /// Human-only: append bullet to nearest NOTES.md
     Human {
         #[command(subcommand)]
@@ -112,16 +119,21 @@ fn main() -> Result<()> {
             ReadKind::Context { path, max_lines } => {
                 cmd_read_context(&cli.root, &policy_path, path.as_ref(), *max_lines)?
             }
-            ReadKind::Raw { .. } => println!("read raw (stub)"),
+            ReadKind::Raw { scope } => cmd_read_raw(&cli.root, &policy_path, scope.as_ref())?,
             ReadKind::Derived { .. } => println!("read derived (stub)"),
-            ReadKind::Scratch { .. } => println!("read scratch (stub)"),
+            ReadKind::Scratch { max } => cmd_read_scratch(&cli.root, *max)?,
         },
         Commands::Write { what } => match what {
-            WriteKind::Scratch { .. } => println!("write scratch (stub)"),
+            WriteKind::Scratch { text, kind } => {
+                cmd_write_scratch(&cli.root, &cli.actor, text, kind.as_deref())?
+            }
             WriteKind::Derived { .. } => println!("write derived (stub)"),
         },
         Commands::Ingest => println!("ingest (stub)"),
-        Commands::Search { query } => println!("search {:?} (stub)", query),
+        Commands::Search {
+            query,
+            include_scratch,
+        } => cmd_search(&cli.root, query, *include_scratch)?,
         Commands::Human { sub } => match sub {
             HumanSub::AppendRaw { .. } => {
                 if cli.actor != "human" {
@@ -151,6 +163,53 @@ fn cmd_read_context(
         // already newline
     } else if !excerpt.is_empty() {
         println!();
+    }
+    Ok(())
+}
+
+fn cmd_read_raw(
+    root: &std::path::Path,
+    policy_path: &std::path::Path,
+    scope: Option<&PathBuf>,
+) -> Result<()> {
+    let policy = policy::load(policy_path)?;
+    let patterns: Vec<String> = policy
+        .filesystem
+        .as_ref()
+        .and_then(|fs| fs.raw_inputs.as_ref())
+        .and_then(|ri| ri.patterns.as_ref())
+        .cloned()
+        .unwrap_or_else(|| {
+            raw::DEFAULT_RAW_PATTERNS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect()
+        });
+    let paths = raw::discover_raw_files(root, scope, &patterns)?;
+    let out = raw::read_raw_content(&paths)?;
+    print!("{}", out);
+    Ok(())
+}
+
+fn cmd_read_scratch(root: &std::path::Path, max: Option<usize>) -> Result<()> {
+    let out = scratch::read_scratch(root, max)?;
+    print!("{}", out);
+    Ok(())
+}
+
+fn cmd_write_scratch(
+    root: &std::path::Path,
+    actor: &str,
+    text: &str,
+    kind: Option<&str>,
+) -> Result<()> {
+    scratch::append_scratch(root, actor, kind.unwrap_or("note"), text)
+}
+
+fn cmd_search(root: &std::path::Path, query: &str, include_scratch: bool) -> Result<()> {
+    let lines = search::search(root, query, include_scratch)?;
+    for line in &lines {
+        println!("{}", line);
     }
     Ok(())
 }
