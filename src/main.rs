@@ -1,7 +1,11 @@
 //! Hyena CLI: policy-enforcing, file-first agent substrate.
 //! Contract: repos/docs/internal/agent/HYENA_CLI_SPEC.md
 
+mod agent_log;
+mod cluster;
 mod context;
+mod derived;
+mod ingest;
 mod policy;
 mod raw;
 mod scratch;
@@ -14,7 +18,13 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     name = "hyena",
-    about = "Hyena: policy-enforced, file-first agent substrate"
+    about = "Hyena: policy-enforced, file-first agent substrate",
+    version = env!("HYENA_BUILD_VERSION"),
+    long_version = concat!(
+        env!("HYENA_BUILD_VERSION"),
+        "\ncheckpoint: ",
+        env!("HYENA_CHECKPOINT_ID")
+    )
 )]
 struct Cli {
     #[arg(long, default_value = ".")]
@@ -32,24 +42,33 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Read: context, raw, derived, scratch
+    /// Read: context, raw, derived, scratch, agent-log
     Read {
         #[command(subcommand)]
         what: ReadKind,
     },
-    /// Write: scratch, derived (policy-checked)
+    /// Write: scratch, agent-log, derived (policy-checked)
     Write {
         #[command(subcommand)]
         what: WriteKind,
     },
     /// Walk NOTES.md, chunk, append events to .notes/notes.ndjson
-    Ingest,
+    Ingest {
+        /// Also dedupe by normalized text within each source file.
+        #[arg(long)]
+        semantic_dedupe: bool,
+        /// Only ingest these paths (relative to root). Delta mode: e.g. from webhook changed_paths.
+        #[arg(long, num_args = 1..)]
+        only: Vec<std::path::PathBuf>,
+    },
     /// Grep/scan .notes/notes.ndjson (and optionally scratch)
     Search {
         query: String,
         #[arg(long)]
         include_scratch: bool,
     },
+    /// Cluster notes by similarity, write .work/clusters/
+    Cluster,
     /// Human-only: append bullet to nearest NOTES.md
     Human {
         #[command(subcommand)]
@@ -79,11 +98,22 @@ enum ReadKind {
         #[arg(long)]
         max: Option<usize>,
     },
+    #[command(name = "agent-log")]
+    AgentLog {
+        #[arg(long)]
+        max: Option<usize>,
+    },
 }
 
 #[derive(Subcommand)]
 enum WriteKind {
     Scratch {
+        text: String,
+        #[arg(long)]
+        kind: Option<String>,
+    },
+    #[command(name = "agent-log")]
+    AgentLog {
         text: String,
         #[arg(long)]
         kind: Option<String>,
@@ -120,20 +150,30 @@ fn main() -> Result<()> {
                 cmd_read_context(&cli.root, &policy_path, path.as_ref(), *max_lines)?
             }
             ReadKind::Raw { scope } => cmd_read_raw(&cli.root, &policy_path, scope.as_ref())?,
-            ReadKind::Derived { .. } => println!("read derived (stub)"),
+            ReadKind::Derived {
+                scope_contains,
+                max,
+            } => cmd_read_derived(&cli.root, scope_contains.as_deref(), *max)?,
             ReadKind::Scratch { max } => cmd_read_scratch(&cli.root, *max)?,
+            ReadKind::AgentLog { max } => cmd_read_agent_log(&cli.root, *max)?,
         },
         Commands::Write { what } => match what {
             WriteKind::Scratch { text, kind } => {
                 cmd_write_scratch(&cli.root, &cli.actor, text, kind.as_deref())?
             }
+            WriteKind::AgentLog { text, kind } => {
+                cmd_write_agent_log(&cli.root, &cli.actor, text, kind.as_deref())?
+            }
             WriteKind::Derived { .. } => println!("write derived (stub)"),
         },
-        Commands::Ingest => println!("ingest (stub)"),
+        Commands::Ingest { semantic_dedupe, only } => {
+            cmd_ingest(&cli.root, &policy_path, *semantic_dedupe, &only)?
+        }
         Commands::Search {
             query,
             include_scratch,
         } => cmd_search(&cli.root, query, *include_scratch)?,
+        Commands::Cluster => cmd_cluster(&cli.root, &policy_path)?,
         Commands::Human { sub } => match sub {
             HumanSub::AppendRaw { .. } => {
                 if cli.actor != "human" {
@@ -204,6 +244,55 @@ fn cmd_write_scratch(
     kind: Option<&str>,
 ) -> Result<()> {
     scratch::append_scratch(root, actor, kind.unwrap_or("note"), text)
+}
+
+fn cmd_read_agent_log(root: &std::path::Path, max: Option<usize>) -> Result<()> {
+    let out = agent_log::read_agent_log(root, max)?;
+    print!("{}", out);
+    Ok(())
+}
+
+fn cmd_write_agent_log(
+    root: &std::path::Path,
+    actor: &str,
+    text: &str,
+    kind: Option<&str>,
+) -> Result<()> {
+    agent_log::append_agent_log(root, actor, kind.unwrap_or("note"), text)
+}
+
+fn cmd_ingest(
+    root: &std::path::Path,
+    policy_path: &std::path::Path,
+    semantic_dedupe: bool,
+    only_paths: &[std::path::PathBuf],
+) -> Result<()> {
+    let only = if only_paths.is_empty() {
+        None
+    } else {
+        Some(only_paths)
+    };
+    let count = ingest::run_ingest(root, policy_path, None, semantic_dedupe, only)?;
+    println!("ingested {} atoms", count);
+    Ok(())
+}
+
+fn cmd_read_derived(
+    root: &std::path::Path,
+    scope_contains: Option<&str>,
+    max: Option<usize>,
+) -> Result<()> {
+    let lines = derived::read_derived(root, scope_contains, max)?;
+    for line in &lines {
+        println!("{}", line);
+    }
+    Ok(())
+}
+
+fn cmd_cluster(root: &std::path::Path, policy_path: &std::path::Path) -> Result<()> {
+    let count = cluster::run_cluster(root, policy_path)?;
+    println!("wrote {} clusters", count);
+    Ok(())
 }
 
 fn cmd_search(root: &std::path::Path, query: &str, include_scratch: bool) -> Result<()> {
