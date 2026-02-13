@@ -1,0 +1,207 @@
+//! Light clustering: read .notes/notes.ndjson, group by word-overlap similarity, write .work/clusters/.
+
+use anyhow::{Context, Result};
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
+
+const DERIVED_LOG: &str = ".notes/notes.ndjson";
+const CLUSTERS_DIR: &str = ".work/clusters";
+
+/// Minimum notes per cluster (per policy promotion.scrap_to_cluster.min_atoms).
+const MIN_ATOMS: usize = 2;
+/// Similarity threshold (per policy promotion.scrap_to_cluster.similarity_threshold; default 0.65).
+const DEFAULT_SIMILARITY_THRESHOLD: f64 = 0.35;
+
+#[derive(Debug, serde::Deserialize)]
+struct NoteLine {
+    text: Option<String>,
+    source: Option<String>,
+    #[serde(default)]
+    provenance: Option<ProvenanceRef>,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct ProvenanceRef {
+    source_file: Option<String>,
+    line_start: Option<u32>,
+    line_end: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClusterNote {
+    pub source_file: String,
+    pub line_start: u32,
+    pub line_end: u32,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClusterFile {
+    pub notes: Vec<ClusterNote>,
+}
+
+fn tokenize(text: &str) -> HashSet<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
+    if a.is_empty() && b.is_empty() {
+        return 1.0;
+    }
+    let inter = a.intersection(b).count();
+    let union = a.union(b).count();
+    if union == 0 {
+        0.0
+    } else {
+        inter as f64 / union as f64
+    }
+}
+
+/// Union-Find for grouping note indices.
+struct UnionFind {
+    parent: Vec<usize>,
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+        }
+    }
+    fn find(&mut self, i: usize) -> usize {
+        if self.parent[i] != i {
+            self.parent[i] = self.find(self.parent[i]);
+        }
+        self.parent[i]
+    }
+    fn union(&mut self, i: usize, j: usize) {
+        let pi = self.find(i);
+        let pj = self.find(j);
+        if pi != pj {
+            self.parent[pi] = pj;
+        }
+    }
+    fn groups(&mut self) -> HashMap<usize, Vec<usize>> {
+        let n = self.parent.len();
+        for i in 0..n {
+            let _ = self.find(i);
+        }
+        let mut out: HashMap<usize, Vec<usize>> = HashMap::new();
+        for i in 0..n {
+            out.entry(self.find(i)).or_default().push(i);
+        }
+        out
+    }
+}
+
+/// Run cluster: read derived log, group by similarity, write .work/clusters/cluster-<uuid>.yaml.
+pub fn run_cluster(root: &Path, _policy_path: &Path) -> Result<usize> {
+    let log_path = root.join(DERIVED_LOG);
+    if !log_path.is_file() {
+        return Ok(0);
+    }
+
+    let content = fs::read_to_string(&log_path)?;
+    let mut notes: Vec<NoteLine> = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(n) = serde_json::from_str::<NoteLine>(trimmed) {
+            notes.push(n);
+        }
+    }
+
+    if notes.len() < MIN_ATOMS {
+        return Ok(0);
+    }
+
+    let word_sets: Vec<HashSet<String>> = notes
+        .iter()
+        .map(|n| tokenize(n.text.as_deref().unwrap_or("")))
+        .collect();
+
+    let mut uf = UnionFind::new(notes.len());
+    let threshold = DEFAULT_SIMILARITY_THRESHOLD;
+
+    for i in 0..notes.len() {
+        for j in (i + 1)..notes.len() {
+            if jaccard(&word_sets[i], &word_sets[j]) >= threshold {
+                uf.union(i, j);
+            }
+        }
+    }
+
+    let groups = uf.groups();
+    let clusters_dir = root.join(CLUSTERS_DIR);
+    fs::create_dir_all(&clusters_dir)
+        .with_context(|| format!("create {}", clusters_dir.display()))?;
+
+    let mut written = 0usize;
+    for (_root_idx, indices) in groups {
+        if indices.len() < MIN_ATOMS {
+            continue;
+        }
+        let cluster_notes: Vec<ClusterNote> = indices
+            .iter()
+            .map(|&idx| {
+                let n = &notes[idx];
+                let prov = n.provenance.as_ref();
+                ClusterNote {
+                    source_file: prov
+                        .and_then(|p| p.source_file.clone())
+                        .or_else(|| n.source.clone())
+                        .unwrap_or_else(|| "?".to_string()),
+                    line_start: prov.and_then(|p| p.line_start).unwrap_or(0),
+                    line_end: prov.and_then(|p| p.line_end).unwrap_or(0),
+                    text: n.text.clone().unwrap_or_default(),
+                }
+            })
+            .collect();
+
+        let id = uuid_simple();
+        let path = clusters_dir.join(format!("cluster-{}.yaml", id));
+        let file = ClusterFile {
+            notes: cluster_notes,
+        };
+        let yaml = serde_yaml::to_string(&file).context("serialize cluster")?;
+        fs::write(&path, yaml).with_context(|| format!("write {}", path.display()))?;
+        written += 1;
+    }
+
+    Ok(written)
+}
+
+fn uuid_simple() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!("{:016x}", t % 0xffff_ffff_ffff_ffff)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokenize_and_jaccard() {
+        let a = tokenize("alpha beta gamma");
+        let b = tokenize("alpha beta delta");
+        assert!(jaccard(&a, &b) > 0.3);
+        assert!(jaccard(&a, &a) >= 0.99);
+    }
+
+    #[test]
+    fn min_atoms_constant() {
+        assert!(MIN_ATOMS >= 2);
+    }
+}

@@ -1,7 +1,10 @@
 //! Hyena CLI: policy-enforcing, file-first agent substrate.
 //! Contract: repos/docs/internal/agent/HYENA_CLI_SPEC.md
 
+mod cluster;
 mod context;
+mod derived;
+mod ingest;
 mod policy;
 mod raw;
 mod scratch;
@@ -50,6 +53,8 @@ enum Commands {
         #[arg(long)]
         include_scratch: bool,
     },
+    /// Cluster notes by similarity, write .work/clusters/
+    Cluster,
     /// Human-only: append bullet to nearest NOTES.md
     Human {
         #[command(subcommand)]
@@ -120,7 +125,10 @@ fn main() -> Result<()> {
                 cmd_read_context(&cli.root, &policy_path, path.as_ref(), *max_lines)?
             }
             ReadKind::Raw { scope } => cmd_read_raw(&cli.root, &policy_path, scope.as_ref())?,
-            ReadKind::Derived { .. } => println!("read derived (stub)"),
+            ReadKind::Derived {
+                scope_contains,
+                max,
+            } => cmd_read_derived(&cli.root, scope_contains.as_deref(), *max)?,
             ReadKind::Scratch { max } => cmd_read_scratch(&cli.root, *max)?,
         },
         Commands::Write { what } => match what {
@@ -129,11 +137,12 @@ fn main() -> Result<()> {
             }
             WriteKind::Derived { .. } => println!("write derived (stub)"),
         },
-        Commands::Ingest => println!("ingest (stub)"),
+        Commands::Ingest => cmd_ingest(&cli.root, &policy_path)?,
         Commands::Search {
             query,
             include_scratch,
         } => cmd_search(&cli.root, query, *include_scratch)?,
+        Commands::Cluster => cmd_cluster(&cli.root, &policy_path)?,
         Commands::Human { sub } => match sub {
             HumanSub::AppendRaw { .. } => {
                 if cli.actor != "human" {
@@ -204,6 +213,30 @@ fn cmd_write_scratch(
     kind: Option<&str>,
 ) -> Result<()> {
     scratch::append_scratch(root, actor, kind.unwrap_or("note"), text)
+}
+
+fn cmd_ingest(root: &std::path::Path, policy_path: &std::path::Path) -> Result<()> {
+    let count = ingest::run_ingest(root, policy_path, None)?;
+    println!("ingested {} atoms", count);
+    Ok(())
+}
+
+fn cmd_read_derived(
+    root: &std::path::Path,
+    scope_contains: Option<&str>,
+    max: Option<usize>,
+) -> Result<()> {
+    let lines = derived::read_derived(root, scope_contains, max)?;
+    for line in &lines {
+        println!("{}", line);
+    }
+    Ok(())
+}
+
+fn cmd_cluster(root: &std::path::Path, policy_path: &std::path::Path) -> Result<()> {
+    let count = cluster::run_cluster(root, policy_path)?;
+    println!("wrote {} clusters", count);
+    Ok(())
 }
 
 fn cmd_search(root: &std::path::Path, query: &str, include_scratch: bool) -> Result<()> {

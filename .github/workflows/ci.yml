@@ -41,3 +41,9 @@ jobs:
         run: cargo clippy --release -- -D warnings
       - name: Test
         run: cargo test --release
+      - name: Ingest (on push)
+        if: github.event_name == 'push'
+        run: ./target/release/hyena --root . ingest
+      - name: Cluster (on push)
+        if: github.event_name == 'push'
+        run: ./target/release/hyena --root . cluster

@@ -139,6 +139,76 @@ fn search_derived_log() {
 }
 
 #[test]
+fn ingest_then_read_derived_and_search() {
+    let root = test_root("ingest");
+    std::fs::create_dir_all(root.join(".agent")).unwrap();
+    std::fs::write(
+        root.join(".agent/POLICY.yaml"),
+        r#"policy:
+  name: hyena
+filesystem:
+  raw_inputs:
+    patterns:
+      - "**/NOTES.md"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("NOTES.md"),
+        "# Repo notes\n\n- alpha bullet\n- beta bullet\n\nSome paragraph.\n",
+    )
+    .unwrap();
+    let _guard = RemoveOnDrop(root.clone());
+    let root_str = root.to_string_lossy().into_owned();
+
+    let out = hyena()
+        .args(["--root", &root_str, "ingest"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "ingest failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("ingested") && stdout.contains("atoms"),
+        "stdout: {:?}",
+        stdout
+    );
+
+    let out = hyena()
+        .args(["--root", &root_str, "read", "derived"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("alpha bullet"));
+    assert!(stdout.contains("beta bullet"));
+    assert!(stdout.contains("Some paragraph"));
+    assert!(stdout.contains("Repo notes"));
+
+    let out = hyena()
+        .args(["--root", &root_str, "search", "alpha"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("alpha"));
+
+    let out = hyena()
+        .args(["--root", &root_str, "cluster"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "cluster failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("clusters"));
+}
+
+#[test]
 fn read_context_finds_nearest_notes() {
     let root = test_root("context");
     std::fs::create_dir_all(root.join("a/b")).unwrap();
