@@ -1,6 +1,7 @@
 //! Hyena CLI: policy-enforcing, file-first agent substrate.
 //! Contract: repos/docs/internal/agent/HYENA_CLI_SPEC.md
 
+mod agent_log;
 mod cluster;
 mod context;
 mod derived;
@@ -35,12 +36,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Read: context, raw, derived, scratch
+    /// Read: context, raw, derived, scratch, agent-log
     Read {
         #[command(subcommand)]
         what: ReadKind,
     },
-    /// Write: scratch, derived (policy-checked)
+    /// Write: scratch, agent-log, derived (policy-checked)
     Write {
         #[command(subcommand)]
         what: WriteKind,
@@ -88,11 +89,22 @@ enum ReadKind {
         #[arg(long)]
         max: Option<usize>,
     },
+    #[command(name = "agent-log")]
+    AgentLog {
+        #[arg(long)]
+        max: Option<usize>,
+    },
 }
 
 #[derive(Subcommand)]
 enum WriteKind {
     Scratch {
+        text: String,
+        #[arg(long)]
+        kind: Option<String>,
+    },
+    #[command(name = "agent-log")]
+    AgentLog {
         text: String,
         #[arg(long)]
         kind: Option<String>,
@@ -134,10 +146,14 @@ fn main() -> Result<()> {
                 max,
             } => cmd_read_derived(&cli.root, scope_contains.as_deref(), *max)?,
             ReadKind::Scratch { max } => cmd_read_scratch(&cli.root, *max)?,
+            ReadKind::AgentLog { max } => cmd_read_agent_log(&cli.root, *max)?,
         },
         Commands::Write { what } => match what {
             WriteKind::Scratch { text, kind } => {
                 cmd_write_scratch(&cli.root, &cli.actor, text, kind.as_deref())?
+            }
+            WriteKind::AgentLog { text, kind } => {
+                cmd_write_agent_log(&cli.root, &cli.actor, text, kind.as_deref())?
             }
             WriteKind::Derived { .. } => println!("write derived (stub)"),
         },
@@ -219,6 +235,21 @@ fn cmd_write_scratch(
     kind: Option<&str>,
 ) -> Result<()> {
     scratch::append_scratch(root, actor, kind.unwrap_or("note"), text)
+}
+
+fn cmd_read_agent_log(root: &std::path::Path, max: Option<usize>) -> Result<()> {
+    let out = agent_log::read_agent_log(root, max)?;
+    print!("{}", out);
+    Ok(())
+}
+
+fn cmd_write_agent_log(
+    root: &std::path::Path,
+    actor: &str,
+    text: &str,
+    kind: Option<&str>,
+) -> Result<()> {
+    agent_log::append_agent_log(root, actor, kind.unwrap_or("note"), text)
 }
 
 fn cmd_ingest(

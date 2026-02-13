@@ -77,6 +77,54 @@ fn write_scratch_then_read_scratch_roundtrip() {
 }
 
 #[test]
+fn write_agent_log_then_read_agent_log_roundtrip() {
+    let root = test_root("agent_log");
+    let _guard = RemoveOnDrop(root.clone());
+
+    std::fs::create_dir_all(root.join(".agent")).unwrap();
+    std::fs::write(root.join(".agent/POLICY.yaml"), "policy:\n  name: hyena\n").unwrap();
+
+    let root_str = root.to_string_lossy().into_owned();
+    let out = hyena()
+        .args([
+            "--root",
+            &root_str,
+            "--actor",
+            "agent",
+            "write",
+            "agent-log",
+            "tool result: read_derived ok",
+            "--kind",
+            "tool_result",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = hyena()
+        .args(["--root", &root_str, "read", "agent-log"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "read agent-log: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("tool result: read_derived ok"),
+        "stdout: {:?}",
+        stdout
+    );
+    assert!(stdout.contains("\"actor\":\"agent\""));
+    assert!(stdout.contains("\"kind\":\"tool_result\""));
+}
+
+#[test]
 fn read_raw_finds_notes_md() {
     let root = test_root("raw");
     std::fs::create_dir_all(root.join("sub")).unwrap();
