@@ -261,7 +261,7 @@ pub fn run_ingest(
 
     let mut paths = raw::discover_raw_files(&root, scope, &patterns)?;
     if let Some(only) = only_paths {
-        // Treat Some(&[]) the same as None: do not filter paths if the allowlist is empty.
+        // Treat Some(&[]) the same as None: do not filter paths if the allow list is empty.
         if !only.is_empty() {
             let only_set: std::collections::HashSet<String> = only
                 .iter()

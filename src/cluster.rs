@@ -158,6 +158,7 @@ pub fn run_cluster(root: &Path, _policy_path: &Path) -> Result<usize> {
     }
 
     // Build token sets per note and a reverse index from token -> note indices.
+    // This optimization reduces comparisons from O(n²) to proportional to pairs sharing tokens.
     let mut word_sets: Vec<HashSet<String>> = Vec::with_capacity(notes.len());
     let mut token_index: HashMap<String, Vec<usize>> = HashMap::new();
 
@@ -239,7 +240,7 @@ fn uuid_simple() -> String {
         .as_nanos();
     // Use process ID and a counter to avoid collisions within the same nanosecond
     let pid = std::process::id();
-    // Use a simple hash of the timestamp and PID for uniqueness
+    // Use a simple hash of the timestamp and PID for uniqueness (31 is a common prime multiplier)
     let hash = (t.wrapping_mul(31).wrapping_add(pid as u128)) % 0xffff_ffff_ffff_ffff;
     format!("{:016x}", hash)
 }
