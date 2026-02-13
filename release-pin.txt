@@ -1,0 +1,3 @@
+# Pinned checkpoint for install-hyena-release.sh. Single line: CHECKPOINT_ID=cp-YYYYMMDD-short_sha
+# Update after creating a new release; commit to pin the workspace to that build.
+CHECKPOINT_ID=cp-20260213-2da2357

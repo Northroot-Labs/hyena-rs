@@ -18,7 +18,13 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     name = "hyena",
-    about = "Hyena: policy-enforced, file-first agent substrate"
+    about = "Hyena: policy-enforced, file-first agent substrate",
+    version = env!("HYENA_BUILD_VERSION"),
+    long_version = concat!(
+        env!("HYENA_BUILD_VERSION"),
+        "\ncheckpoint: ",
+        env!("HYENA_CHECKPOINT_ID")
+    )
 )]
 struct Cli {
     #[arg(long, default_value = ".")]

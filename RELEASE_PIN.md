@@ -1,48 +1,55 @@
-# Pinned Hyena release (for MCP and scripts)
+# Pinned Hyena release (checkpoint-based)
 
-Use this version and checksum to install the Hyena CLI reproducibly.
+Versioning is **automatic** and **machine-checkable** per [VERSIONING_STANDARD](../docs/internal/ci/VERSIONING_STANDARD.md). We pin by **checkpoint ID**, not semver.
 
-| Field | Value |
-|-------|--------|
-| **Version** | 0.2.0 |
-| **Tag** | v0.2.0 |
-| **Release URL** | https://github.com/Northroot-Labs/hyena-rs/releases/tag/v0.2.0 |
+## Pin files
 
-## Checksums (darwin/linux)
+| File | Purpose |
+|------|--------|
+| `release-pin.txt` | Single line `CHECKPOINT_ID=cp-YYYYMMDD-<short_sha>`. Defines which build to install. |
+| `checksums-pin.txt` | One line per artifact: `sha256  hyena-<checkpoint_id>-<arch>-<os>`. Verification only. |
 
-After the GitHub release is created, download the artifact for your platform and verify:
+## Build release (local)
 
-```text
-# arm64 macOS (Apple Silicon)
-<checksum>  hyena-0.2.0-arm64-darwin
-```
-
-Current build (arm64-darwin):
-
-```text
-8a53490b30a0176d3d3db390520a1fd05d23978b6b0121f27fee677df2f46316  hyena-0.2.0-arm64-darwin
-```
-
-## Create GitHub release (one-time after tag is pushed)
-
-From `repos/hyena-rs` with `release/` containing the built artifact and `release/checksums.txt`:
+From `repos/hyena-rs`:
 
 ```bash
-gh release create v0.2.0 \
-  --repo Northroot-Labs/hyena-rs \
-  --title "v0.2.0" \
-  --notes "Delta ingest (--only paths), MCP server. See RELEASE_PIN.md for checksums." \
-  release/hyena-0.2.0-*-* release/checksums.txt
+./scripts/build-release.sh
 ```
 
-Replace `release/hyena-0.2.0-*-*` with the actual artifact path(s) if needed (e.g. `release/hyena-0.2.0-arm64-darwin`).
+Produces `release/hyena-<checkpoint_id>-<arch>-<os>`, `release/checksums.txt`, and `release/release-manifest.json`. Checkpoint ID is derived from git and build date (no manual version bump).
+
+## Create GitHub release
+
+Tag = checkpoint ID. From `repos/hyena-rs` after running `build-release.sh`:
+
+```bash
+cp="$(grep checkpoint_id release/release-manifest.json | cut -d'"' -f4)"
+gh release create "$cp" \
+  --repo Northroot-Labs/hyena-rs \
+  --title "$cp" \
+  --notes "Checkpoint release. Verify with release-manifest.json or checksums-pin.txt." \
+  release/hyena-"$cp"-* release/checksums.txt release/release-manifest.json
+```
 
 ## Install (pinned)
 
-From workspace root:
+**Local (no GitHub release):** From `repos/hyena-rs`, after `build-release.sh`:
+
+```bash
+./scripts/install-hyena-local.sh
+```
+
+Puts the built binary in `bin/hyena`. Cursor MCP uses `HYENA_BIN=../../bin/hyena`.
+
+**From GitHub:** From workspace root, after a release exists with tag = checkpoint ID:
 
 ```bash
 ./scripts/install-hyena-release.sh
 ```
 
-Installs to `repos/hyena-rs/bin/hyena` and verifies against `checksums-pin.txt`. MCP uses `HYENA_BIN=../../bin/hyena` (from `mcp_server` cwd).
+Reads `release-pin.txt`, downloads artifact, verifies with `checksums-pin.txt`, installs to `repos/hyena-rs/bin/hyena`.
+
+## Updating the pin
+
+After a new checkpoint release: set `CHECKPOINT_ID` in `release-pin.txt` and add the new artifact line(s) to `checksums-pin.txt`; commit both.
