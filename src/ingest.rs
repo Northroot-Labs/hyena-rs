@@ -288,20 +288,28 @@ pub fn run_ingest(
 
     let mut paths = raw::discover_raw_files(&root, scope, &patterns)?;
     if let Some(only) = only_paths {
-        let only_set: std::collections::HashSet<String> = only
-            .iter()
-            .map(|o| {
-                if o.is_absolute() {
-                    normalize_relative(o, &root)
-                } else {
-                    o.components()
-                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                        .collect::<Vec<_>>()
-                        .join("/")
-                }
-            })
-            .collect();
-        paths.retain(|p| only_set.contains(&path_relative_to_root(p, &root)));
+        // Treat Some(&[]) the same as None: do not filter paths if the allow list is empty.
+        if !only.is_empty() {
+            let only_set: std::collections::HashSet<String> = only
+                .iter()
+                .map(|o| {
+                    if o.is_absolute() {
+                        normalize_relative(o, &root)
+                    } else {
+                        // Normalize relative paths by filtering out CurDir and handling ParentDir
+                        o.components()
+                            .filter_map(|c| match c {
+                                std::path::Component::CurDir => None,
+                                std::path::Component::ParentDir => Some("..".to_string()),
+                                _ => Some(c.as_os_str().to_string_lossy().into_owned()),
+                            })
+                            .collect::<Vec<_>>()
+                            .join("/")
+                    }
+                })
+                .collect();
+            paths.retain(|p| only_set.contains(&path_relative_to_root(p, &root)));
+        }
     }
     let derived_path = root.join(DERIVED_LOG);
     if let Some(parent) = derived_path.parent() {
@@ -325,10 +333,16 @@ pub fn run_ingest(
             .parent()
             .and_then(|p| p.strip_prefix(&root).ok())
             .map(|p| {
-                p.components()
+                let joined = p
+                    .components()
                     .map(|c| c.as_os_str().to_string_lossy().into_owned())
                     .collect::<Vec<_>>()
-                    .join("/")
+                    .join("/");
+                if joined.is_empty() {
+                    ".".to_string()
+                } else {
+                    joined
+                }
             })
             .unwrap_or_else(|| ".".to_string());
 
@@ -489,7 +503,10 @@ After
         std::fs::write(root.join(".agent/POLICY.yaml"), "policy:\n  name: hyena\n").unwrap();
         std::fs::write(root.join("NOTES.md"), "# T\n\n- x\n").unwrap();
         let policy = root.join(".agent/POLICY.yaml");
-        let n = run_ingest(&root, &policy, None, false, None).unwrap();
+        
+        // Empty only_paths should behave like a full ingest.
+        let only: Vec<std::path::PathBuf> = Vec::new();
+        let n = run_ingest(&root, &policy, None, false, Some(&only)).unwrap();
         assert!(n >= 2);
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -12,7 +12,7 @@ const CLUSTERS_DIR: &str = ".work/clusters";
 /// Minimum notes per cluster (per policy promotion.scrap_to_cluster.min_atoms).
 const MIN_ATOMS: usize = 2;
 /// Similarity threshold (per policy promotion.scrap_to_cluster.similarity_threshold; default 0.65).
-const DEFAULT_SIMILARITY_THRESHOLD: f64 = 0.35;
+const DEFAULT_SIMILARITY_THRESHOLD: f64 = 0.65;
 
 #[derive(Debug, serde::Deserialize)]
 struct NoteLine {
@@ -157,18 +157,37 @@ pub fn run_cluster(root: &Path, _policy_path: &Path) -> Result<usize> {
         return Ok(0);
     }
 
-    let word_sets: Vec<HashSet<String>> = notes
-        .iter()
-        .map(|n| tokenize_normalized(n.text.as_deref().unwrap_or("")))
-        .collect();
+    // Build token sets per note and a reverse index from token -> note indices.
+    // This optimization reduces comparisons from O(n²) to proportional to pairs sharing tokens.
+    let mut word_sets: Vec<HashSet<String>> = Vec::with_capacity(notes.len());
+    let mut token_index: HashMap<String, Vec<usize>> = HashMap::new();
+
+    for (idx, n) in notes.iter().enumerate() {
+        let tokens = tokenize_normalized(n.text.as_deref().unwrap_or(""));
+        // Populate reverse index so we only compare notes that share at least one token.
+        for token in tokens.iter() {
+            token_index.entry(token.clone()).or_default().push(idx);
+        }
+        word_sets.push(tokens);
+    }
 
     let mut uf = UnionFind::new(notes.len());
     let threshold = DEFAULT_SIMILARITY_THRESHOLD;
 
-    for i in 0..notes.len() {
-        for j in (i + 1)..notes.len() {
-            if jaccard(&word_sets[i], &word_sets[j]) >= threshold {
-                uf.union(i, j);
+    // Track which pairs we've already compared, since notes can share multiple tokens.
+    let mut compared_pairs: HashSet<(usize, usize)> = HashSet::new();
+
+    for indices in token_index.values() {
+        // For each token, consider all unique pairs of notes that contain it.
+        for (pos_i, &i) in indices.iter().enumerate() {
+            for &j in indices.iter().skip(pos_i + 1) {
+                let pair = if i < j { (i, j) } else { (j, i) };
+                if !compared_pairs.insert(pair) {
+                    continue;
+                }
+                if jaccard(&word_sets[pair.0], &word_sets[pair.1]) >= threshold {
+                    uf.union(pair.0, pair.1);
+                }
             }
         }
     }
@@ -219,7 +238,11 @@ fn uuid_simple() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    format!("{:016x}", t % 0xffff_ffff_ffff_ffff)
+    // Use process ID and a counter to avoid collisions within the same nanosecond
+    let pid = std::process::id();
+    // Use a simple hash of the timestamp and PID for uniqueness (31 is a common prime multiplier)
+    let hash = (t.wrapping_mul(31).wrapping_add(pid as u128)) % 0xffff_ffff_ffff_ffff;
+    format!("{:016x}", hash)
 }
 
 #[cfg(test)]

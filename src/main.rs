@@ -58,7 +58,7 @@ enum Commands {
         #[arg(long)]
         semantic_dedupe: bool,
         /// Only ingest these paths (relative to root). Delta mode: e.g. from webhook changed_paths.
-        #[arg(long)]
+        #[arg(long, num_args = 1..)]
         only: Vec<std::path::PathBuf>,
     },
     /// Grep/scan .notes/notes.ndjson (and optionally scratch)
