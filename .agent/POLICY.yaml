@@ -1,0 +1,57 @@
+# Hyena policy for this repo (CLI-compatible subset).
+# Canon: https://github.com/Northroot-Labs/docs/blob/main/internal/agent/hyena-policy-spec.yaml
+# Secrets/identity: org SECRETS_AND_IDENTITY_STANDARD (see docs/ORG_CONTEXT.md)
+
+policy:
+  name: hyena
+  version: 1.0.0
+
+actors:
+  human:
+    can_write_raw_inputs: true
+  agent:
+    can_write_raw_inputs: false
+
+filesystem:
+  raw_inputs:
+    patterns:
+      - "**/NOTES.md"
+      - "**/*.notes.txt"
+      - "**/*.notes.md"
+    permissions:
+      read: true
+      write: false
+      modify: false
+
+  agent_scratch:
+    patterns:
+      - ".hyena/agent/**"
+    permissions:
+      read: true
+      append: true
+      modify_existing: false
+      delete: false
+
+  derived_logs:
+    patterns:
+      - ".notes/notes.ndjson"
+    permissions:
+      read: true
+      append: true
+      modify_existing: false
+      delete: false
+
+  derived_workspaces:
+    roots:
+      - ".work/"
+    permissions:
+      create: true
+      read: true
+      write: true
+      delete: false
+
+invariants:
+  append_only:
+    enforced_on:
+      - ".notes/notes.ndjson"
+      - ".hyena/agent/scratch.ndjson"

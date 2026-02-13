@@ -4,6 +4,7 @@ Rust CLI for **Hyena**: policy-enforcing, file-first agent substrate. Implements
 
 - **Org convention:** [Hyena (docs)](https://github.com/Northroot-Labs/docs/tree/main/internal/agent) — doctrine, policy spec, repo layout.
 - **Task list:** [HYENA_RS_TASKS.md](https://github.com/Northroot-Labs/docs/blob/main/internal/agent/HYENA_RS_TASKS.md) (canonical in Northroot-Labs/docs).
+- **Org context (knowledge transfer):** [docs/ORG_CONTEXT.md](docs/ORG_CONTEXT.md) — single place for links to DATE_STANDARD, TESTING_STANDARD, AGENTIC/model-choice, secrets, research. Scope: this repo is the sole focus for making hyena useful.
 
 ## Build / install
 
