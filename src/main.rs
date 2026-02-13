@@ -46,7 +46,11 @@ enum Commands {
         what: WriteKind,
     },
     /// Walk NOTES.md, chunk, append events to .notes/notes.ndjson
-    Ingest,
+    Ingest {
+        /// Also dedupe by normalized text within each source file.
+        #[arg(long)]
+        semantic_dedupe: bool,
+    },
     /// Grep/scan .notes/notes.ndjson (and optionally scratch)
     Search {
         query: String,
@@ -137,7 +141,9 @@ fn main() -> Result<()> {
             }
             WriteKind::Derived { .. } => println!("write derived (stub)"),
         },
-        Commands::Ingest => cmd_ingest(&cli.root, &policy_path)?,
+        Commands::Ingest { semantic_dedupe } => {
+            cmd_ingest(&cli.root, &policy_path, *semantic_dedupe)?
+        }
         Commands::Search {
             query,
             include_scratch,
@@ -215,8 +221,12 @@ fn cmd_write_scratch(
     scratch::append_scratch(root, actor, kind.unwrap_or("note"), text)
 }
 
-fn cmd_ingest(root: &std::path::Path, policy_path: &std::path::Path) -> Result<()> {
-    let count = ingest::run_ingest(root, policy_path, None)?;
+fn cmd_ingest(
+    root: &std::path::Path,
+    policy_path: &std::path::Path,
+    semantic_dedupe: bool,
+) -> Result<()> {
+    let count = ingest::run_ingest(root, policy_path, None, semantic_dedupe)?;
     println!("ingested {} atoms", count);
     Ok(())
 }

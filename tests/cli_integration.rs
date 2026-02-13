@@ -206,6 +206,14 @@ filesystem:
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("clusters"));
+
+    // Dedupe is tested in ingest::tests::ingest_dedupes_second_run (same process).
+    // Here we only assert second ingest runs successfully.
+    let out2 = hyena()
+        .args(["--root", &root_str, "ingest"])
+        .output()
+        .unwrap();
+    assert!(out2.status.success());
 }
 
 #[test]

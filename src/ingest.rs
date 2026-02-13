@@ -4,12 +4,77 @@
 use crate::{policy, raw};
 use anyhow::{Context, Result};
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 const DERIVED_LOG: &str = ".notes/notes.ndjson";
+
+/// Provenance key for dedupe: same (source, line_start, line_end) = same atom.
+fn provenance_key(source: &str, line_start: u32, line_end: u32) -> (String, u32, u32) {
+    (source.to_string(), line_start, line_end)
+}
+
+fn semantic_key(source: &str, text: &str) -> (String, String) {
+    let normalized = text
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (source.to_string(), normalized)
+}
+
+/// Load existing dedupe keys from derived log.
+fn load_existing_keys(
+    derived_path: &Path,
+    include_semantic: bool,
+) -> Result<(HashSet<(String, u32, u32)>, HashSet<(String, String)>)> {
+    let mut set = HashSet::new();
+    let mut semantic_set = HashSet::new();
+    let path = if derived_path.is_file() {
+        derived_path
+            .canonicalize()
+            .unwrap_or_else(|_| derived_path.to_path_buf())
+    } else {
+        return Ok((set, semantic_set));
+    };
+    #[derive(Deserialize)]
+    struct Line {
+        #[serde(default)]
+        source: Option<String>,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        provenance: Option<Provenance>,
+    }
+    let f =
+        std::fs::File::open(&path).with_context(|| format!("read existing {}", path.display()))?;
+    for line in BufReader::new(f).lines() {
+        let line = line.context("read line")?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(l) = serde_json::from_str::<Line>(trimmed) {
+            if let Some(p) = l.provenance {
+                set.insert(provenance_key(&p.source_file, p.line_start, p.line_end));
+                if include_semantic {
+                    let source = l.source.unwrap_or(p.source_file);
+                    let text = l.text.unwrap_or_default();
+                    semantic_set.insert(semantic_key(&source, &text));
+                }
+            } else if include_semantic {
+                let source = l.source.unwrap_or_else(|| "?".to_string());
+                let text = l.text.unwrap_or_default();
+                semantic_set.insert(semantic_key(&source, &text));
+            }
+        }
+    }
+    Ok((set, semantic_set))
+}
 
 /// One atom emitted to notes.ndjson.
 #[derive(Debug, Serialize)]
@@ -27,7 +92,7 @@ pub struct NoteEntry {
     pub confidence: Option<f64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provenance {
     pub source_file: String,
     pub line_start: u32,
@@ -157,7 +222,13 @@ fn path_relative_to_root(path: &Path, root: &Path) -> String {
 }
 
 /// Run ingest: discover raw files, chunk each, append to .notes/notes.ndjson.
-pub fn run_ingest(root: &Path, policy_path: &Path, scope: Option<&PathBuf>) -> Result<usize> {
+pub fn run_ingest(
+    root: &Path,
+    policy_path: &Path,
+    scope: Option<&PathBuf>,
+    semantic_dedupe: bool,
+) -> Result<usize> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let policy = policy::load(policy_path)?;
     let patterns: Vec<String> = policy
         .filesystem
@@ -172,11 +243,13 @@ pub fn run_ingest(root: &Path, policy_path: &Path, scope: Option<&PathBuf>) -> R
                 .collect()
         });
 
-    let paths = raw::discover_raw_files(root, scope, &patterns)?;
+    let paths = raw::discover_raw_files(&root, scope, &patterns)?;
     let derived_path = root.join(DERIVED_LOG);
     if let Some(parent) = derived_path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
+
+    let (mut existing, mut semantic_existing) = load_existing_keys(&derived_path, semantic_dedupe)?;
 
     let mut file = OpenOptions::new()
         .create(true)
@@ -188,10 +261,10 @@ pub fn run_ingest(root: &Path, policy_path: &Path, scope: Option<&PathBuf>) -> R
     for path in &paths {
         let content =
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        let source_rel = path_relative_to_root(path, root);
+        let source_rel = path_relative_to_root(path, &root);
         let scope_str: String = path
             .parent()
-            .and_then(|p| p.strip_prefix(root).ok())
+            .and_then(|p| p.strip_prefix(&root).ok())
             .map(|p| {
                 p.components()
                     .map(|c| c.as_os_str().to_string_lossy().into_owned())
@@ -204,6 +277,19 @@ pub fn run_ingest(root: &Path, policy_path: &Path, scope: Option<&PathBuf>) -> R
             if chunk.text.is_empty() {
                 continue;
             }
+            let key = provenance_key(&source_rel, chunk.line_start, chunk.line_end);
+            if existing.contains(&key) {
+                continue;
+            }
+            if semantic_dedupe {
+                let s_key = semantic_key(&source_rel, &chunk.text);
+                if semantic_existing.contains(&s_key) {
+                    continue;
+                }
+                semantic_existing.insert(s_key);
+            }
+            existing.insert(key);
+
             let ts = Utc::now().to_rfc3339();
             let entry = NoteEntry {
                 ts,
@@ -272,5 +358,39 @@ After
         let code: Vec<_> = chunks.iter().filter(|c| c.kind == "code_block").collect();
         assert_eq!(code.len(), 1);
         assert!(code[0].text.contains("fn main()"));
+    }
+
+    #[test]
+    fn ingest_dedupes_second_run() {
+        let root = std::env::temp_dir().join("hyena_ingest_dedup");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agent")).unwrap();
+        std::fs::write(root.join(".agent/POLICY.yaml"), "policy:\n  name: hyena\n").unwrap();
+        std::fs::write(root.join("NOTES.md"), "# T\n\n- a\n- b\n").unwrap();
+        let policy = root.join(".agent/POLICY.yaml");
+        let n1 = run_ingest(&root, &policy, None, false).unwrap();
+        assert!(n1 >= 3, "first ingest should write at least 3 atoms");
+        let n2 = run_ingest(&root, &policy, None, false).unwrap();
+        assert_eq!(n2, 0, "second ingest should append 0 (dedupe)");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ingest_semantic_dedupe_handles_line_shifts() {
+        let root = std::env::temp_dir().join("hyena_ingest_semantic_dedup");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agent")).unwrap();
+        std::fs::write(root.join(".agent/POLICY.yaml"), "policy:\n  name: hyena\n").unwrap();
+        std::fs::write(root.join("NOTES.md"), "# T\n\n- keep this\n").unwrap();
+        let policy = root.join(".agent/POLICY.yaml");
+
+        let n1 = run_ingest(&root, &policy, None, true).unwrap();
+        assert!(n1 >= 2);
+
+        // Same semantic content shifted by one line.
+        std::fs::write(root.join("NOTES.md"), "\n# T\n\n- keep this\n").unwrap();
+        let n2 = run_ingest(&root, &policy, None, true).unwrap();
+        assert_eq!(n2, 0);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

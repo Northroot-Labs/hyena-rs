@@ -42,12 +42,33 @@ pub struct ClusterFile {
     pub notes: Vec<ClusterNote>,
 }
 
+/// Normalize markdown-ish text for tokenization: replace **, [], () with space so words are preserved.
+fn normalize_for_tokens(text: &str) -> String {
+    let mut out = text.to_string();
+    for (from, to) in [
+        ("**", " "),
+        ("[", " "),
+        ("]", " "),
+        ("(", " "),
+        (")", " "),
+        (":", " "),
+    ] {
+        out = out.replace(from, to);
+    }
+    out
+}
+
 fn tokenize(text: &str) -> HashSet<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|s| !s.is_empty())
         .map(String::from)
         .collect()
+}
+
+/// Tokenize after normalizing markdown so "**Focus:**" and "Focus" yield the same words.
+fn tokenize_normalized(text: &str) -> HashSet<String> {
+    tokenize(&normalize_for_tokens(text))
 }
 
 fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
@@ -109,12 +130,25 @@ pub fn run_cluster(root: &Path, _policy_path: &Path) -> Result<usize> {
 
     let content = fs::read_to_string(&log_path)?;
     let mut notes: Vec<NoteLine> = Vec::new();
+    let mut seen: HashSet<(String, u32, u32)> = HashSet::new();
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
         if let Ok(n) = serde_json::from_str::<NoteLine>(trimmed) {
+            let prov = n.provenance.as_ref();
+            let source = prov
+                .and_then(|p| p.source_file.clone())
+                .or_else(|| n.source.clone())
+                .unwrap_or_else(|| "?".to_string());
+            let line_start = prov.and_then(|p| p.line_start).unwrap_or(0);
+            let line_end = prov.and_then(|p| p.line_end).unwrap_or(0);
+            let key = (source.clone(), line_start, line_end);
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.insert(key);
             notes.push(n);
         }
     }
@@ -125,7 +159,7 @@ pub fn run_cluster(root: &Path, _policy_path: &Path) -> Result<usize> {
 
     let word_sets: Vec<HashSet<String>> = notes
         .iter()
-        .map(|n| tokenize(n.text.as_deref().unwrap_or("")))
+        .map(|n| tokenize_normalized(n.text.as_deref().unwrap_or("")))
         .collect();
 
     let mut uf = UnionFind::new(notes.len());
@@ -203,5 +237,16 @@ mod tests {
     #[test]
     fn min_atoms_constant() {
         assert!(MIN_ATOMS >= 2);
+    }
+
+    #[test]
+    fn normalize_strips_markdown() {
+        let t = normalize_for_tokens("**Focus:** Make hyena useful.");
+        assert!(t.contains("Focus"));
+        assert!(t.contains("Make"));
+        assert!(!t.contains('*'));
+        let t2 = normalize_for_tokens("[docs](ORG_CONTEXT.md)");
+        assert!(!t2.contains('['));
+        assert!(t2.contains("docs"));
     }
 }
