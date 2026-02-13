@@ -1,11 +1,18 @@
 //! Hyena CLI: policy-enforcing, file-first agent substrate.
 //! Contract: repos/docs/internal/agent/HYENA_CLI_SPEC.md
 
+mod context;
+mod policy;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "hyena", about = "Hyena: policy-enforced, file-first agent substrate")]
+#[command(
+    name = "hyena",
+    about = "Hyena: policy-enforced, file-first agent substrate"
+)]
 struct Cli {
     #[arg(long, default_value = ".")]
     root: std::path::PathBuf,
@@ -35,9 +42,7 @@ enum Commands {
     /// Walk NOTES.md, chunk, append events to .notes/notes.ndjson
     Ingest,
     /// Grep/scan .notes/notes.ndjson (and optionally scratch)
-    Search {
-        query: String,
-    },
+    Search { query: String },
     /// Human-only: append bullet to nearest NOTES.md
     Human {
         #[command(subcommand)]
@@ -98,13 +103,15 @@ enum HumanSub {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let _policy_path = cli
+    let policy_path = cli
         .policy
         .unwrap_or_else(|| cli.root.join(".agent/POLICY.yaml"));
 
     match &cli.command {
         Commands::Read { what } => match what {
-            ReadKind::Context { .. } => println!("read context (stub)"),
+            ReadKind::Context { path, max_lines } => {
+                cmd_read_context(&cli.root, &policy_path, path.as_ref(), *max_lines)?
+            }
             ReadKind::Raw { .. } => println!("read raw (stub)"),
             ReadKind::Derived { .. } => println!("read derived (stub)"),
             ReadKind::Scratch { .. } => println!("read scratch (stub)"),
@@ -123,6 +130,27 @@ fn main() -> Result<()> {
                 println!("human append-raw (stub)");
             }
         },
+    }
+    Ok(())
+}
+
+fn cmd_read_context(
+    root: &std::path::Path,
+    policy_path: &std::path::Path,
+    path: Option<&PathBuf>,
+    max_lines: Option<usize>,
+) -> Result<()> {
+    let _policy = policy::load(policy_path)?;
+    let (_dir, notes_path) = context::nearest_notes_dir(root, path.cloned())
+        .ok_or_else(|| anyhow::anyhow!("no NOTES.md found from path (walk up to root)"))?;
+    let excerpt = context::read_notes_excerpt(&notes_path, max_lines)?;
+    println!("{}", notes_path.display());
+    println!("---");
+    print!("{}", excerpt);
+    if excerpt.ends_with('\n') {
+        // already newline
+    } else if !excerpt.is_empty() {
+        println!();
     }
     Ok(())
 }

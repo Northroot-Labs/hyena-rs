@@ -1,0 +1,43 @@
+# CI: build, fmt, clippy, test. Org patterns: permissions, concurrency, timeout.
+# See Northroot-Labs/docs internal/ci/CI_PATTERNS_FROM_CLEARLYOPS.md
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  merge_group:
+    types: [checks_requested]
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+      - name: Check format
+        run: cargo fmt --all -- --check
+      - name: Build
+        run: cargo build --release
+      - name: Clippy
+        run: cargo clippy --release -- -D warnings
+      - name: Test
+        run: cargo test --release
