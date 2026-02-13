@@ -221,12 +221,28 @@ fn path_relative_to_root(path: &Path, root: &Path) -> String {
         .unwrap_or_else(|_| path.display().to_string())
 }
 
+/// Normalize path to forward-slash relative form for comparison.
+fn normalize_relative(path: &Path, root: &Path) -> String {
+    let rel = path
+        .strip_prefix(root)
+        .map(|p| {
+            p.components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .unwrap_or_else(|_| path_relative_to_root(path, root));
+    rel
+}
+
 /// Run ingest: discover raw files, chunk each, append to .notes/notes.ndjson.
+/// If only_paths is Some, only raw files whose path (relative to root) is in the set are processed (delta-aware).
 pub fn run_ingest(
     root: &Path,
     policy_path: &Path,
     scope: Option<&PathBuf>,
     semantic_dedupe: bool,
+    only_paths: Option<&[PathBuf]>,
 ) -> Result<usize> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let policy = policy::load(policy_path)?;
@@ -243,7 +259,23 @@ pub fn run_ingest(
                 .collect()
         });
 
-    let paths = raw::discover_raw_files(&root, scope, &patterns)?;
+    let mut paths = raw::discover_raw_files(&root, scope, &patterns)?;
+    if let Some(only) = only_paths {
+        let only_set: std::collections::HashSet<String> = only
+            .iter()
+            .map(|o| {
+                if o.is_absolute() {
+                    normalize_relative(o, &root)
+                } else {
+                    o.components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                        .join("/")
+                }
+            })
+            .collect();
+        paths.retain(|p| only_set.contains(&path_relative_to_root(p, &root)));
+    }
     let derived_path = root.join(DERIVED_LOG);
     if let Some(parent) = derived_path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
@@ -368,9 +400,9 @@ After
         std::fs::write(root.join(".agent/POLICY.yaml"), "policy:\n  name: hyena\n").unwrap();
         std::fs::write(root.join("NOTES.md"), "# T\n\n- a\n- b\n").unwrap();
         let policy = root.join(".agent/POLICY.yaml");
-        let n1 = run_ingest(&root, &policy, None, false).unwrap();
+        let n1 = run_ingest(&root, &policy, None, false, None).unwrap();
         assert!(n1 >= 3, "first ingest should write at least 3 atoms");
-        let n2 = run_ingest(&root, &policy, None, false).unwrap();
+        let n2 = run_ingest(&root, &policy, None, false, None).unwrap();
         assert_eq!(n2, 0, "second ingest should append 0 (dedupe)");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -384,13 +416,49 @@ After
         std::fs::write(root.join("NOTES.md"), "# T\n\n- keep this\n").unwrap();
         let policy = root.join(".agent/POLICY.yaml");
 
-        let n1 = run_ingest(&root, &policy, None, true).unwrap();
+        let n1 = run_ingest(&root, &policy, None, true, None).unwrap();
         assert!(n1 >= 2);
 
         // Same semantic content shifted by one line.
         std::fs::write(root.join("NOTES.md"), "\n# T\n\n- keep this\n").unwrap();
-        let n2 = run_ingest(&root, &policy, None, true).unwrap();
+        let n2 = run_ingest(&root, &policy, None, true, None).unwrap();
         assert_eq!(n2, 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ingest_delta_only_paths_processes_listed_files() {
+        let root = std::env::temp_dir().join("hyena_ingest_delta");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agent")).unwrap();
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        std::fs::write(root.join(".agent/POLICY.yaml"), "policy:\n  name: hyena\n").unwrap();
+        std::fs::write(root.join("NOTES.md"), "# Root\n\n- r1\n").unwrap();
+        std::fs::write(root.join("a/NOTES.md"), "# A\n\n- a1\n").unwrap();
+        std::fs::write(root.join("a/b/NOTES.md"), "# B\n\n- b1\n").unwrap();
+        let policy = root.join(".agent/POLICY.yaml");
+
+        // Delta: only a/NOTES.md
+        let only = vec![std::path::PathBuf::from("a/NOTES.md")];
+        let n = run_ingest(&root, &policy, None, false, Some(&only)).unwrap();
+        assert!(n >= 2, "a/NOTES.md should yield at least 2 atoms");
+
+        // Full ingest would get root and a/b too; with only_paths we only got a/NOTES.md.
+        let all = run_ingest(&root, &policy, None, false, None).unwrap();
+        assert!(all >= n, "full ingest should add root and a/b atoms");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ingest_delta_empty_only_paths_means_full_ingest() {
+        let root = std::env::temp_dir().join("hyena_ingest_delta_full");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agent")).unwrap();
+        std::fs::write(root.join(".agent/POLICY.yaml"), "policy:\n  name: hyena\n").unwrap();
+        std::fs::write(root.join("NOTES.md"), "# T\n\n- x\n").unwrap();
+        let policy = root.join(".agent/POLICY.yaml");
+        let n = run_ingest(&root, &policy, None, false, None).unwrap();
+        assert!(n >= 2);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

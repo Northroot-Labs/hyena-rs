@@ -265,6 +265,31 @@ filesystem:
 }
 
 #[test]
+fn ingest_only_paths_delta() {
+    let root = test_root("ingest_only");
+    std::fs::create_dir_all(root.join("sub/dir")).unwrap();
+    std::fs::create_dir_all(root.join(".agent")).unwrap();
+    std::fs::write(root.join(".agent/POLICY.yaml"), "policy:\n  name: hyena\n").unwrap();
+    std::fs::write(root.join("NOTES.md"), "# R\n\n- r1\n").unwrap();
+    std::fs::write(root.join("sub/NOTES.md"), "# S\n\n- s1\n").unwrap();
+    let _guard = RemoveOnDrop(root.clone());
+    let root_str = root.to_string_lossy().into_owned();
+
+    let out = hyena()
+        .args(["--root", &root_str, "ingest", "--only", "sub/NOTES.md"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "ingest --only failed: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ingested"));
+    let n: usize = stdout
+        .split_whitespace()
+        .find_map(|w| w.parse().ok())
+        .unwrap_or(0);
+    assert!(n >= 2, "delta ingest should yield at least 2 atoms from sub/NOTES.md");
+}
+
+#[test]
 fn read_context_finds_nearest_notes() {
     let root = test_root("context");
     std::fs::create_dir_all(root.join("a/b")).unwrap();

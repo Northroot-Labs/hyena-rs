@@ -51,6 +51,9 @@ enum Commands {
         /// Also dedupe by normalized text within each source file.
         #[arg(long)]
         semantic_dedupe: bool,
+        /// Only ingest these paths (relative to root). Delta mode: e.g. from webhook changed_paths.
+        #[arg(long)]
+        only: Vec<std::path::PathBuf>,
     },
     /// Grep/scan .notes/notes.ndjson (and optionally scratch)
     Search {
@@ -157,8 +160,8 @@ fn main() -> Result<()> {
             }
             WriteKind::Derived { .. } => println!("write derived (stub)"),
         },
-        Commands::Ingest { semantic_dedupe } => {
-            cmd_ingest(&cli.root, &policy_path, *semantic_dedupe)?
+        Commands::Ingest { semantic_dedupe, only } => {
+            cmd_ingest(&cli.root, &policy_path, *semantic_dedupe, &only)?
         }
         Commands::Search {
             query,
@@ -256,8 +259,14 @@ fn cmd_ingest(
     root: &std::path::Path,
     policy_path: &std::path::Path,
     semantic_dedupe: bool,
+    only_paths: &[std::path::PathBuf],
 ) -> Result<()> {
-    let count = ingest::run_ingest(root, policy_path, None, semantic_dedupe)?;
+    let only = if only_paths.is_empty() {
+        None
+    } else {
+        Some(only_paths)
+    };
+    let count = ingest::run_ingest(root, policy_path, None, semantic_dedupe, only)?;
     println!("ingested {} atoms", count);
     Ok(())
 }
