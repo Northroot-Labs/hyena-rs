@@ -108,6 +108,33 @@ struct Chunk {
     text: String,
 }
 
+/// Treat as markdown for chunking if path has .md or .markdown extension.
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+        .unwrap_or(false)
+}
+
+/// Chunk plain text / unknown format: one atom per non-empty line. Preserves provenance.
+fn chunk_plain(content: &str) -> Vec<Chunk> {
+    let mut out = Vec::new();
+    for (i, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let line_num = (i + 1) as u32;
+        out.push(Chunk {
+            line_start: line_num,
+            line_end: line_num,
+            kind: "line",
+            text: trimmed.to_string(),
+        });
+    }
+    out
+}
+
 /// Chunk markdown per policy rules: top-level bullet, paragraph, heading, code block.
 fn chunk_markdown(content: &str) -> Vec<Chunk> {
     let mut out = Vec::new();
@@ -305,7 +332,12 @@ pub fn run_ingest(
             })
             .unwrap_or_else(|| ".".to_string());
 
-        for chunk in chunk_markdown(&content) {
+        let chunks = if is_markdown_path(path) {
+            chunk_markdown(&content)
+        } else {
+            chunk_plain(&content)
+        };
+        for chunk in chunks {
             if chunk.text.is_empty() {
                 continue;
             }
@@ -459,6 +491,35 @@ After
         let policy = root.join(".agent/POLICY.yaml");
         let n = run_ingest(&root, &policy, None, false, None).unwrap();
         assert!(n >= 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn chunk_plain_one_per_line() {
+        let text = "first line\n\nsecond line\n  trimmed  \n";
+        let chunks = chunk_plain(text);
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].kind, "line");
+        assert_eq!(chunks[0].text, "first line");
+        assert_eq!(chunks[1].text, "second line");
+        assert_eq!(chunks[2].text, "trimmed");
+    }
+
+    #[test]
+    fn ingest_plain_txt_format_agnostic() {
+        let root = std::env::temp_dir().join("hyena_ingest_plain");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agent")).unwrap();
+        std::fs::write(
+            root.join(".agent/POLICY.yaml"),
+            "policy:\n  name: hyena\nfilesystem:\n  raw_inputs:\n    patterns:\n      - '**/NOTES.md'\n      - '**/inbox/*.txt'\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("inbox")).unwrap();
+        std::fs::write(root.join("inbox/scratch.txt"), "curious about downloads\nneed PR for branch X\n").unwrap();
+        let policy = root.join(".agent/POLICY.yaml");
+        let n = run_ingest(&root, &policy, None, false, None).unwrap();
+        assert!(n >= 2, "plain .txt should yield one atom per non-empty line");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

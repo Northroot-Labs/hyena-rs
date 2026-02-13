@@ -13,15 +13,20 @@ cargo build --release
 # Binary: target/release/hyena
 ```
 
-## Commands (skeleton)
+## Commands
 
-- `read context | raw | derived | scratch`
-- `write scratch | derived`
-- `ingest`
-- `search QUERY`
+- `read context | raw | derived | scratch | agent-log`
+- `write scratch | agent-log | derived`
+- `ingest` (optionally `--only path` for delta)
+- `search QUERY` (optionally `--include-scratch`)
+- `cluster` → `.work/clusters/`
 - `human append-raw` (actor=human only)
 
 Invocation: `--root <path>` (default: cwd), `--policy <path>` (default: `{root}/.agent/POLICY.yaml`), `--actor human|agent`.
+
+**Examples:** [CLI_EXAMPLES.md](CLI_EXAMPLES.md) — one-liners for humans and agents.
+
+**MCP (Cursor/agents):** [mcp_server/README.md](mcp_server/README.md). Workspace root has `.cursor/mcp.json` to wire the Hyena MCP server for local testing.
 
 ## License
 

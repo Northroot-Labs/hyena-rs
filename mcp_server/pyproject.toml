@@ -1,0 +1,13 @@
+[project]
+name = "hyena-mcp-server"
+version = "0.1.0"
+description = "MCP server that exposes Hyena CLI as context and tools for Cursor and other agents"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.0",
+]
+
+[project.scripts]
+hyena-mcp = "hyena_mcp:main"
+
